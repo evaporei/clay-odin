@@ -22,9 +22,9 @@ String :: struct {
 }
 
 StringSlice :: struct {
-	length: c.int32_t,
-	chars:  [^]c.char,
-	baseChars:  [^]c.char,
+	length:    c.int32_t,
+	chars:     [^]c.char,
+	baseChars: [^]c.char,
 }
 
 Vector2 :: [2]c.float
@@ -86,7 +86,7 @@ RenderCommandType :: enum EnumBackingType {
 }
 
 RectangleElementConfig :: struct {
-	color:        Color,
+	color: Color,
 }
 
 TextWrapMode :: enum EnumBackingType {
@@ -122,10 +122,10 @@ CustomElementConfig :: struct {
 }
 
 BorderWidth :: struct {
-	left: u16,
-	right: u16,
-	top: u16,
-	bottom: u16,
+	left:            u16,
+	right:           u16,
+	top:             u16,
+	bottom:          u16,
 	betweenChildren: u16,
 }
 
@@ -180,52 +180,52 @@ FloatingElementConfig :: struct {
 
 TextRenderData :: struct {
 	stringContents: StringSlice,
-	textColor: Color,
-	fontId: u16,
-	fontSize: u16,
-	letterSpacing: u16,
-	lineHeight: u16,
+	textColor:      Color,
+	fontId:         u16,
+	fontSize:       u16,
+	letterSpacing:  u16,
+	lineHeight:     u16,
 }
 
 RectangleRenderData :: struct {
 	backgroundColor: Color,
-	cornerRadius: CornerRadius,
+	cornerRadius:    CornerRadius,
 }
 
 ImageRenderData :: struct {
-	backgroundColor: Color,
-	cornerRadius: CornerRadius,
+	backgroundColor:  Color,
+	cornerRadius:     CornerRadius,
 	sourceDimensions: Dimensions,
-	imageData: rawptr,
+	imageData:        rawptr,
 }
 
 CustomRenderData :: struct {
 	backgroundColor: Color,
-	cornerRadius: CornerRadius,
-	customData: rawptr,
+	cornerRadius:    CornerRadius,
+	customData:      rawptr,
 }
 
 BorderRenderData :: struct {
-	color: Color,
+	color:        Color,
 	cornerRadius: CornerRadius,
-	width: BorderWidth,
+	width:        BorderWidth,
 }
 
 RenderCommandData :: struct #raw_union {
 	rectangle: RectangleRenderData,
-	text: TextRenderData,
-	image: ImageRenderData,
-	custom: CustomRenderData,
-	border: BorderRenderData,
+	text:      TextRenderData,
+	image:     ImageRenderData,
+	custom:    CustomRenderData,
+	border:    BorderRenderData,
 }
 
 RenderCommand :: struct {
-	boundingBox:        BoundingBox,
-	renderData:         RenderCommandData,
-	userData:           rawptr,
-	id:                 u32,
-	zIndex:             i16,
-	commandType:        RenderCommandType,
+	boundingBox: BoundingBox,
+	renderData:  RenderCommandData,
+	userData:    rawptr,
+	id:          u32,
+	zIndex:      i16,
+	commandType: RenderCommandType,
 }
 
 ScrollContainerData :: struct {
@@ -285,9 +285,9 @@ Sizing :: struct {
 }
 
 Padding :: struct {
-	left: u16,
-	right: u16,
-	top: u16,
+	left:   u16,
+	right:  u16,
+	top:    u16,
 	bottom: u16,
 }
 
@@ -328,16 +328,16 @@ ClayArray :: struct($type: typeid) {
 }
 
 ElementDeclaration :: struct {
-	id: ElementId,
-	layout: LayoutConfig,
+	id:              ElementId,
+	layout:          LayoutConfig,
 	backgroundColor: Color,
-	cornerRadius: CornerRadius,
-	image: ImageElementConfig,
-	floating: FloatingElementConfig,
-	custom: CustomElementConfig,
-	scroll: ScrollElementConfig,
-	border: BorderElementConfig,
-	userData: rawptr,
+	cornerRadius:    CornerRadius,
+	image:           ImageElementConfig,
+	floating:        FloatingElementConfig,
+	custom:          CustomElementConfig,
+	scroll:          ScrollElementConfig,
+	border:          BorderElementConfig,
+	userData:        rawptr,
 }
 
 ErrorType :: enum EnumBackingType {
@@ -354,15 +354,16 @@ ErrorType :: enum EnumBackingType {
 ErrorData :: struct {
 	errorType: ErrorType,
 	errorText: String,
-	userData: rawptr,
+	userData:  rawptr,
 }
 
 ErrorHandler :: struct {
-	handler: proc "c" (errorData: ErrorData),
+	handler:  proc "c" (errorData: ErrorData),
 	userData: rawptr,
 }
 
-Context :: struct {} // opaque structure, only use as a pointer
+Context :: struct {
+} // opaque structure, only use as a pointer
 
 @(link_prefix = "Clay_", default_calling_convention = "c")
 foreign Clay {
@@ -413,7 +414,7 @@ ConfigureOpenElement :: proc(config: ElementDeclaration) -> bool {
 }
 
 @(deferred_none = _CloseElement)
-UI :: proc() -> proc (config: ElementDeclaration) -> bool {
+UI :: proc() -> proc(config: ElementDeclaration) -> bool {
 	_OpenElement()
 	return ConfigureOpenElement
 }
@@ -427,7 +428,7 @@ TextConfig :: proc(config: TextElementConfig) -> ^TextElementConfig {
 }
 
 PaddingAll :: proc(allPadding: u16) -> Padding {
-	return { left = allPadding, right = allPadding, top = allPadding, bottom = allPadding }
+	return {left = allPadding, right = allPadding, top = allPadding, bottom = allPadding}
 }
 
 CornerRadiusAll :: proc(radius: f32) -> CornerRadius {
