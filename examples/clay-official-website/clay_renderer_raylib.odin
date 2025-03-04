@@ -1,6 +1,6 @@
 package main
 
-import clay "../../clay-odin"
+import clay "../../"
 import "core:math"
 import "core:strings"
 import "vendor:raylib"
