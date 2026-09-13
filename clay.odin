@@ -17,8 +17,9 @@ when ODIN_OS == .Windows {
 }
 
 String :: struct {
-	length: c.int32_t,
-	chars:  [^]c.char,
+	isStaticallyAllocated: c.bool,
+	length:                c.int32_t,
+	chars:                 [^]c.char,
 }
 
 StringSlice :: struct {
@@ -36,7 +37,7 @@ Dimensions :: struct {
 
 Arena :: struct {
 	nextAllocation: uintptr,
-	capacity:       uintptr,
+	capacity:       c.size_t,
 	memory:         [^]c.char,
 }
 
@@ -56,16 +57,17 @@ CornerRadius :: struct {
 	bottomRight: c.float,
 }
 
-BorderData :: struct {
-	width: u32,
-	color: Color,
-}
-
 ElementId :: struct {
 	id:       u32,
 	offset:   u32,
 	baseId:   u32,
 	stringId: String,
+}
+
+ElementIdArray :: struct {
+	capacity:      i32,
+	length:        i32,
+	internalArray: [^]ElementId,
 }
 
 when ODIN_OS == .Windows {
@@ -82,6 +84,8 @@ RenderCommandType :: enum EnumBackingType {
 	Image,
 	ScissorStart,
 	ScissorEnd,
+	OverlayColorStart,
+	OverlayColorEnd,
 	Custom,
 }
 
@@ -102,19 +106,22 @@ TextAlignment :: enum EnumBackingType {
 }
 
 TextElementConfig :: struct {
-	textColor:          Color,
-	fontId:             u16,
-	fontSize:           u16,
-	letterSpacing:      u16,
-	lineHeight:         u16,
-	wrapMode:           TextWrapMode,
-	textAlignment:      TextAlignment,
-	hashStringContents: bool,
+	userData:      rawptr,
+	textColor:     Color,
+	fontId:        u16,
+	fontSize:      u16,
+	letterSpacing: u16,
+	lineHeight:    u16,
+	wrapMode:      TextWrapMode,
+	textAlignment: TextAlignment,
+}
+
+AspectRatioElementConfig :: struct {
+	aspectRatio: f32,
 }
 
 ImageElementConfig :: struct {
-	imageData:        rawptr,
-	sourceDimensions: Dimensions,
+	imageData: rawptr,
 }
 
 CustomElementConfig :: struct {
@@ -134,9 +141,90 @@ BorderElementConfig :: struct {
 	width: BorderWidth,
 }
 
-ScrollElementConfig :: struct {
-	horizontal: bool,
-	vertical:   bool,
+TransitionData :: struct {
+	boundingBox:     BoundingBox,
+	backgroundColor: Color,
+	overlayColor:    Color,
+	borderColor:     Color,
+	borderWidth:     BorderWidth,
+}
+
+TransitionState :: enum c.int {
+	Idle,
+	Entering,
+	Transitioning,
+	Exiting,
+}
+
+TransitionProperty :: enum c.int {
+	X,
+	Y,
+	Width,
+	Height,
+	BackgroundColor,
+	OverlayColor,
+	CornerRadius,
+	BorderColor,
+	BorderWidth,
+}
+
+TransitionPropertyFlags :: bit_set[TransitionProperty;c.int]
+TransitionPropertyPosition :: TransitionPropertyFlags{.X, .Y}
+TransitionPropertyDimensions :: TransitionPropertyFlags{.Width, .Height}
+TransitionPropertyBoundingBox :: TransitionPropertyPosition + TransitionPropertyDimensions
+TransitionPropertyBorder :: TransitionPropertyFlags{.BorderColor, .BorderWidth}
+
+TransitionCallbackArguments :: struct {
+	transitionState: TransitionState,
+	initial:         TransitionData,
+	current:         ^TransitionData,
+	target:          TransitionData,
+	elapsedTime:     f32,
+	duration:        f32,
+	properties:      TransitionPropertyFlags,
+}
+
+TransitionEnterTriggerType :: enum EnumBackingType {
+	SkipOnFirstParentFrame,
+	TriggerOnFirstParentFrame,
+}
+
+TransitionExitTriggerType :: enum EnumBackingType {
+	SkipWhenParentExits,
+	TriggerWhenParentExits,
+}
+
+TransitionInteractionHandlingType :: enum EnumBackingType {
+	DisableInteractionsWhileTransitioningPosition,
+	AllowInteractionsWhileTransitioningPosition,
+}
+
+ExitTransitionSiblingOrdering :: enum EnumBackingType {
+	UnderneathSiblings,
+	NaturalOrder,
+	AboveSiblings,
+}
+
+TransitionElementConfig :: struct {
+	handler:             proc "c" (args: TransitionCallbackArguments) -> bool,
+	duration:            f32,
+	properties:          TransitionPropertyFlags,
+	interactionHandling: TransitionInteractionHandlingType,
+	enter:               struct {
+		setInitialState: proc "c" (initialState: TransitionData, properties: TransitionPropertyFlags) -> TransitionData,
+		trigger:         TransitionEnterTriggerType,
+	},
+	exit:                struct {
+		setFinalState:   proc "c" (finalState: TransitionData, properties: TransitionPropertyFlags) -> TransitionData,
+		trigger:         TransitionExitTriggerType,
+		siblingOrdering: ExitTransitionSiblingOrdering,
+	},
+}
+
+ClipElementConfig :: struct {
+	horizontal:  bool, // clip overflowing elements on the "X" axis
+	vertical:    bool, // clip overflowing elements on the "Y" axis
+	childOffset: Vector2, // offsets the [X,Y] positions of all child elements, primarily for scrolling containers
 }
 
 FloatingAttachPointType :: enum EnumBackingType {
@@ -168,14 +256,20 @@ FloatingAttachToElement :: enum EnumBackingType {
 	Root,
 }
 
+FloatingClipToElement :: enum EnumBackingType {
+	None,
+	AttachedParent,
+}
+
 FloatingElementConfig :: struct {
 	offset:             Vector2,
 	expand:             Dimensions,
 	parentId:           u32,
-	zIndex:             i32,
+	zIndex:             i16,
 	attachment:         FloatingAttachPoints,
 	pointerCaptureMode: PointerCaptureMode,
 	attachTo:           FloatingAttachToElement,
+	clipTo:             FloatingClipToElement,
 }
 
 TextRenderData :: struct {
@@ -193,16 +287,24 @@ RectangleRenderData :: struct {
 }
 
 ImageRenderData :: struct {
-	backgroundColor:  Color,
-	cornerRadius:     CornerRadius,
-	sourceDimensions: Dimensions,
-	imageData:        rawptr,
+	backgroundColor: Color,
+	cornerRadius:    CornerRadius,
+	imageData:       rawptr,
 }
 
 CustomRenderData :: struct {
 	backgroundColor: Color,
 	cornerRadius:    CornerRadius,
 	customData:      rawptr,
+}
+
+ClipRenderData :: struct {
+	horizontal: bool,
+	vertical:   bool,
+}
+
+OverlayColorRenderData :: struct {
+	color: Color,
 }
 
 BorderRenderData :: struct {
@@ -212,11 +314,13 @@ BorderRenderData :: struct {
 }
 
 RenderCommandData :: struct #raw_union {
-	rectangle: RectangleRenderData,
-	text:      TextRenderData,
-	image:     ImageRenderData,
-	custom:    CustomRenderData,
-	border:    BorderRenderData,
+	rectangle:    RectangleRenderData,
+	text:         TextRenderData,
+	image:        ImageRenderData,
+	custom:       CustomRenderData,
+	border:       BorderRenderData,
+	clip:         ClipRenderData,
+	overlayColor: OverlayColorRenderData,
 }
 
 RenderCommand :: struct {
@@ -234,7 +338,7 @@ ScrollContainerData :: struct {
 	scrollPosition:            ^Vector2,
 	scrollContainerDimensions: Dimensions,
 	contentDimensions:         Dimensions,
-	config:                    ScrollElementConfig,
+	config:                    ClipElementConfig,
 	// Indicates whether an actual scroll container matched the provided ID or if the default struct was returned.
 	found:                     bool,
 }
@@ -328,15 +432,17 @@ ClayArray :: struct($type: typeid) {
 }
 
 ElementDeclaration :: struct {
-	id:              ElementId,
 	layout:          LayoutConfig,
 	backgroundColor: Color,
+	overlayColor:    Color,
 	cornerRadius:    CornerRadius,
+	aspectRatio:     AspectRatioElementConfig,
 	image:           ImageElementConfig,
 	floating:        FloatingElementConfig,
 	custom:          CustomElementConfig,
-	scroll:          ScrollElementConfig,
+	clip:            ClipElementConfig,
 	border:          BorderElementConfig,
+	transition:      TransitionElementConfig,
 	userData:        rawptr,
 }
 
@@ -349,6 +455,7 @@ ErrorType :: enum EnumBackingType {
 	FloatingContainerParentNotFound,
 	PercentageOver1,
 	InternalError,
+	UnbalancedOpenClose,
 }
 
 ErrorData :: struct {
@@ -362,27 +469,33 @@ ErrorHandler :: struct {
 	userData: rawptr,
 }
 
-Context :: struct {
-} // opaque structure, only use as a pointer
+Context :: struct {} // opaque structure, only use as a pointer
 
 @(link_prefix = "Clay_", default_calling_convention = "c")
 foreign Clay {
+	_OpenElement :: proc() ---
+	_OpenElementWithId :: proc(id: ElementId) ---
+	_CloseElement :: proc() ---
 	MinMemorySize :: proc() -> u32 ---
-	CreateArenaWithCapacityAndMemory :: proc(capacity: u32, offset: [^]u8) -> Arena ---
+	CreateArenaWithCapacityAndMemory :: proc(capacity: c.size_t, offset: [^]u8) -> Arena ---
 	SetPointerState :: proc(position: Vector2, pointerDown: bool) ---
+	GetPointerState :: proc() -> PointerData ---
 	Initialize :: proc(arena: Arena, layoutDimensions: Dimensions, errorHandler: ErrorHandler) -> ^Context ---
 	GetCurrentContext :: proc() -> ^Context ---
 	SetCurrentContext :: proc(ctx: ^Context) ---
 	UpdateScrollContainers :: proc(enableDragScrolling: bool, scrollDelta: Vector2, deltaTime: c.float) ---
 	SetLayoutDimensions :: proc(dimensions: Dimensions) ---
 	BeginLayout :: proc() ---
-	EndLayout :: proc() -> ClayArray(RenderCommand) ---
+	EndLayout :: proc(deltaTime: c.float) -> ClayArray(RenderCommand) ---
+	GetOpenElementId :: proc() -> u32 ---
 	GetElementId :: proc(id: String) -> ElementId ---
 	GetElementIdWithIndex :: proc(id: String, index: u32) -> ElementId ---
 	GetElementData :: proc(id: ElementId) -> ElementData ---
 	Hovered :: proc() -> bool ---
 	OnHover :: proc(onHoverFunction: proc "c" (id: ElementId, pointerData: PointerData, userData: rawptr), userData: rawptr) ---
 	PointerOver :: proc(id: ElementId) -> bool ---
+	GetPointerOverIds :: proc() -> ElementIdArray ---
+	GetScrollOffset :: proc() -> Vector2 ---
 	GetScrollContainerData :: proc(id: ElementId) -> ScrollContainerData ---
 	SetMeasureTextFunction :: proc(measureTextFunction: proc "c" (text: StringSlice, config: ^TextElementConfig, userData: rawptr) -> Dimensions, userData: rawptr) ---
 	SetQueryScrollOffsetFunction :: proc(queryScrollOffsetFunction: proc "c" (elementId: u32, userData: rawptr) -> Vector2, userData: rawptr) ---
@@ -395,17 +508,15 @@ foreign Clay {
 	GetMaxMeasureTextCacheWordCount :: proc() -> i32 ---
 	SetMaxMeasureTextCacheWordCount :: proc(maxMeasureTextCacheWordCount: i32) ---
 	ResetMeasureTextCache :: proc() ---
+	EaseOut :: proc(arguments: TransitionCallbackArguments) -> bool ---
 }
 
 @(link_prefix = "Clay_", default_calling_convention = "c", private)
 foreign Clay {
-	_OpenElement :: proc() ---
 	_ConfigureOpenElement :: proc(config: ElementDeclaration) ---
-	_CloseElement :: proc() ---
-	_HashString :: proc(key: String, offset: u32, seed: u32) -> ElementId ---
-	_OpenTextElement :: proc(text: String, textConfig: ^TextElementConfig) ---
-	_StoreTextElementConfig :: proc(config: TextElementConfig) -> ^TextElementConfig ---
-	_GetParentElementId :: proc() -> u32 ---
+	_HashString :: proc(key: String, seed: u32) -> ElementId ---
+	_HashStringWithOffset :: proc(key: String, index: u32, seed: u32) -> ElementId ---
+	_OpenTextElement :: proc(text: String, textConfig: TextElementConfig) ---
 }
 
 ConfigureOpenElement :: proc(config: ElementDeclaration) -> bool {
@@ -414,32 +525,58 @@ ConfigureOpenElement :: proc(config: ElementDeclaration) -> bool {
 }
 
 @(deferred_none = _CloseElement)
-UI :: proc() -> proc(config: ElementDeclaration) -> bool {
+UI_WithId :: proc(id: ElementId) -> proc(config: ElementDeclaration) -> bool {
+	_OpenElementWithId(id)
+	return ConfigureOpenElement
+}
+
+@(deferred_none = _CloseElement)
+UI_AutoId :: proc() -> proc(config: ElementDeclaration) -> bool {
 	_OpenElement()
 	return ConfigureOpenElement
 }
 
-Text :: proc(text: string, config: ^TextElementConfig) {
-	_OpenTextElement(MakeString(text), config)
+UI :: proc {
+	UI_WithId,
+	UI_AutoId,
 }
 
-TextConfig :: proc(config: TextElementConfig) -> ^TextElementConfig {
-	return _StoreTextElementConfig(config)
+Text :: proc {
+	TextStatic,
+	TextDynamic,
+}
+
+TextStatic :: proc($text: string, config: TextElementConfig) {
+	wrapped := MakeString(text)
+	wrapped.isStaticallyAllocated = true
+	_OpenTextElement(wrapped, config)
+}
+
+TextDynamic :: proc(text: string, config: TextElementConfig) {
+	_OpenTextElement(MakeString(text), config)
 }
 
 PaddingAll :: proc(allPadding: u16) -> Padding {
 	return {left = allPadding, right = allPadding, top = allPadding, bottom = allPadding}
 }
 
+BorderOutside :: proc(width: u16) -> BorderWidth {
+	return {width, width, width, width, 0}
+}
+
+BorderAll :: proc(width: u16) -> BorderWidth {
+	return {width, width, width, width, width}
+}
+
 CornerRadiusAll :: proc(radius: f32) -> CornerRadius {
 	return CornerRadius{radius, radius, radius, radius}
 }
 
-SizingFit :: proc(sizeMinMax: SizingConstraintsMinMax) -> SizingAxis {
+SizingFit :: proc(sizeMinMax: SizingConstraintsMinMax = {}) -> SizingAxis {
 	return SizingAxis{type = SizingType.Fit, constraints = {sizeMinMax = sizeMinMax}}
 }
 
-SizingGrow :: proc(sizeMinMax: SizingConstraintsMinMax) -> SizingAxis {
+SizingGrow :: proc(sizeMinMax: SizingConstraintsMinMax = {}) -> SizingAxis {
 	return SizingAxis{type = SizingType.Grow, constraints = {sizeMinMax = sizeMinMax}}
 }
 
@@ -456,5 +593,9 @@ MakeString :: proc(label: string) -> String {
 }
 
 ID :: proc(label: string, index: u32 = 0) -> ElementId {
-	return _HashString(MakeString(label), index, 0)
+	return _HashString(MakeString(label), index)
+}
+
+ID_LOCAL :: proc(label: string, index: u32 = 0) -> ElementId {
+	return _HashStringWithOffset(MakeString(label), index, GetOpenElementId())
 }

@@ -1,259 +1,305 @@
 package main
 
 import clay "../../"
+import "base:runtime"
 import "core:math"
 import "core:strings"
-import "vendor:raylib"
+import "core:unicode/utf8"
+import rl "vendor:raylib"
 
-RaylibFont :: struct {
+Raylib_Font :: struct {
 	fontId: u16,
-	font:   raylib.Font,
+	font:   rl.Font,
 }
 
-clayColorToRaylibColor :: proc(color: clay.Color) -> raylib.Color {
-	return raylib.Color{cast(u8)color.r, cast(u8)color.g, cast(u8)color.b, cast(u8)color.a}
+clay_color_to_rl_color :: proc(color: clay.Color) -> rl.Color {
+	return {u8(color.r), u8(color.g), u8(color.b), u8(color.a)}
 }
 
-raylibFonts := [10]RaylibFont{}
+raylib_fonts := [dynamic]Raylib_Font{}
 
-measureText :: proc "c" (
+// Alias for compatibility, default to ascii support
+measure_text :: measure_text_ascii
+
+measure_text_unicode :: proc "c" (
 	text: clay.StringSlice,
 	config: ^clay.TextElementConfig,
 	userData: rawptr,
 ) -> clay.Dimensions {
-	// Measure string size for Font
-	textSize: clay.Dimensions = {0, 0}
+	// Needed for grapheme_count
+	context = runtime.default_context()
 
-	maxTextWidth: f32 = 0
-	lineTextWidth: f32 = 0
+	line_width: f32 = 0
 
-	textHeight := cast(f32)config.fontSize
-	fontToUse := raylibFonts[config.fontId].font
+	font := raylib_fonts[config.fontId].font
+	text_str := string(text.chars[:text.length])
 
-	for i in 0 ..< int(text.length) {
-		if (text.chars[i] == '\n') {
-			maxTextWidth = max(maxTextWidth, lineTextWidth)
-			lineTextWidth = 0
-			continue
-		}
-		index := cast(i32)text.chars[i] - 32
-		if (fontToUse.glyphs[index].advanceX != 0) {
-			lineTextWidth += cast(f32)fontToUse.glyphs[index].advanceX
+	// This function seems somewhat expensive, if you notice performance issues, you could assume
+	// - 1 codepoint per visual character (no grapheme clusters), where you can get the length from the loop
+	// - 1 byte per visual character (ascii), where you can get the length with `text.length`
+	// see `measure_text_ascii`
+	grapheme_count, _, _ := utf8.grapheme_count(text_str)
+
+	for letter, byte_idx in text_str {
+		glyph_index := rl.GetGlyphIndex(font, letter)
+
+		glyph := font.glyphs[glyph_index]
+
+		if glyph.advanceX != 0 {
+			line_width += f32(glyph.advanceX)
 		} else {
-			lineTextWidth +=
-				(fontToUse.recs[index].width + cast(f32)fontToUse.glyphs[index].offsetX)
+			line_width += font.recs[glyph_index].width + f32(font.glyphs[glyph_index].offsetX)
 		}
 	}
 
-	maxTextWidth = max(maxTextWidth, lineTextWidth)
+	scaleFactor := f32(config.fontSize) / f32(font.baseSize)
 
-	textSize.width = maxTextWidth / 2
-	textSize.height = textHeight
+	// Note:
+	//   I'd expect this to be `grapheme_count - 1`,
+	//   but that seems to be one letterSpacing too small
+	//   maybe that's a raylib bug, maybe that's Clay?
+	total_spacing := f32(grapheme_count) * f32(config.letterSpacing)
 
-	return textSize
+	return {width = line_width * scaleFactor + total_spacing, height = f32(config.fontSize)}
 }
 
-clayRaylibRender :: proc(
-	renderCommands: ^clay.ClayArray(clay.RenderCommand),
+measure_text_ascii :: proc "c" (
+	text: clay.StringSlice,
+	config: ^clay.TextElementConfig,
+	userData: rawptr,
+) -> clay.Dimensions {
+	line_width: f32 = 0
+
+	font := raylib_fonts[config.fontId].font
+	text_str := string(text.chars[:text.length])
+
+	for i in 0 ..< len(text_str) {
+		glyph_index := text_str[i] - 32
+
+		glyph := font.glyphs[glyph_index]
+
+		if glyph.advanceX != 0 {
+			line_width += f32(glyph.advanceX)
+		} else {
+			line_width += font.recs[glyph_index].width + f32(font.glyphs[glyph_index].offsetX)
+		}
+	}
+
+	scaleFactor := f32(config.fontSize) / f32(font.baseSize)
+
+	// Note:
+	//   I'd expect this to be `len(text_str) - 1`,
+	//   but that seems to be one letterSpacing too small
+	//   maybe that's a raylib bug, maybe that's Clay?
+	total_spacing := f32(len(text_str)) * f32(config.letterSpacing)
+
+	return {width = line_width * scaleFactor + total_spacing, height = f32(config.fontSize)}
+}
+
+clay_raylib_render :: proc(
+	render_commands: ^clay.ClayArray(clay.RenderCommand),
 	allocator := context.temp_allocator,
 ) {
-	for i in 0 ..< int(renderCommands.length) {
-		renderCommand := clay.RenderCommandArray_Get(renderCommands, cast(i32)i)
-		boundingBox := renderCommand.boundingBox
-		switch (renderCommand.commandType) {
-		case clay.RenderCommandType.None:
-			{}
-		case clay.RenderCommandType.Text:
-			config := renderCommand.renderData.text
-			// Raylib uses standard C strings so isn't compatible with cheap slices, we need to clone the string to append null terminator
+	overlay_colors := make([dynamic]clay.Color, allocator)
+	for i in 0 ..< render_commands.length {
+		render_command := clay.RenderCommandArray_Get(render_commands, i)
+		bounds := render_command.boundingBox
+
+		switch render_command.commandType {
+		case .None: // None
+		case .Text:
+			config := render_command.renderData.text
+
 			text := string(config.stringContents.chars[:config.stringContents.length])
-			cloned := strings.clone_to_cstring(text, allocator)
-			fontToUse: raylib.Font = raylibFonts[config.fontId].font
-			raylib.DrawTextEx(
-				fontToUse,
-				cloned,
-				raylib.Vector2{boundingBox.x, boundingBox.y},
-				cast(f32)config.fontSize,
-				cast(f32)config.letterSpacing,
-				clayColorToRaylibColor(config.textColor),
+
+			// Raylib uses C strings instead of Odin strings, so we need to clone
+			// Assume this will be freed elsewhere since we default to the temp allocator
+			cstr_text := strings.clone_to_cstring(text, allocator)
+
+			font := raylib_fonts[config.fontId].font
+			rl.DrawTextEx(
+				font,
+				cstr_text,
+				{bounds.x, bounds.y},
+				f32(config.fontSize),
+				f32(config.letterSpacing),
+				clay_color_to_rl_color(config.textColor),
 			)
-		case clay.RenderCommandType.Image:
-			config := renderCommand.renderData.image
-			tintColor := config.backgroundColor
-			if (tintColor.rgba == 0) {
-				tintColor = {255, 255, 255, 255}
+		case .Image:
+			config := render_command.renderData.image
+			tint: clay.Color
+			if len(overlay_colors) > 0 {
+				tint = overlay_colors[len(overlay_colors) - 1]
 			}
-			// TODO image handling
-			imageTexture := cast(^raylib.Texture2D)config.imageData
-			raylib.DrawTextureEx(
+			if tint == 0 {
+				tint = {255, 255, 255, 255}
+			}
+
+			imageTexture := (^rl.Texture2D)(config.imageData)
+			rl.DrawTextureEx(
 				imageTexture^,
-				raylib.Vector2{boundingBox.x, boundingBox.y},
+				{bounds.x, bounds.y},
 				0,
-				boundingBox.width / cast(f32)imageTexture.width,
-				clayColorToRaylibColor(tintColor),
+				bounds.width / f32(imageTexture.width),
+				clay_color_to_rl_color(tint),
 			)
-		case clay.RenderCommandType.ScissorStart:
-			raylib.BeginScissorMode(
-				cast(i32)math.round(boundingBox.x),
-				cast(i32)math.round(boundingBox.y),
-				cast(i32)math.round(boundingBox.width),
-				cast(i32)math.round(boundingBox.height),
+		case .ScissorStart:
+			rl.BeginScissorMode(
+				i32(math.round(bounds.x)),
+				i32(math.round(bounds.y)),
+				i32(math.round(bounds.width)),
+				i32(math.round(bounds.height)),
 			)
-		case clay.RenderCommandType.ScissorEnd:
-			raylib.EndScissorMode()
-		case clay.RenderCommandType.Rectangle:
-			config := renderCommand.renderData.rectangle
-			if (config.cornerRadius.topLeft > 0) {
-				radius: f32 =
-					(config.cornerRadius.topLeft * 2) / min(boundingBox.width, boundingBox.height)
-				raylib.DrawRectangleRounded(
-					raylib.Rectangle {
-						boundingBox.x,
-						boundingBox.y,
-						boundingBox.width,
-						boundingBox.height,
-					},
+		case .ScissorEnd:
+			rl.EndScissorMode()
+		case .Rectangle:
+			config := render_command.renderData.rectangle
+			if config.cornerRadius.topLeft > 0 {
+				radius: f32 = (config.cornerRadius.topLeft * 2) / min(bounds.width, bounds.height)
+				draw_rect_rounded(
+					bounds.x,
+					bounds.y,
+					bounds.width,
+					bounds.height,
 					radius,
-					8,
-					clayColorToRaylibColor(config.backgroundColor),
+					config.backgroundColor,
 				)
 			} else {
-				raylib.DrawRectangle(
-					cast(i32)boundingBox.x,
-					cast(i32)boundingBox.y,
-					cast(i32)boundingBox.width,
-					cast(i32)boundingBox.height,
-					clayColorToRaylibColor(config.backgroundColor),
-				)
+				draw_rect(bounds.x, bounds.y, bounds.width, bounds.height, config.backgroundColor)
 			}
-		case clay.RenderCommandType.Border:
-			config := renderCommand.renderData.border
+		case .Border:
+			config := render_command.renderData.border
 			// Left border
-			if (config.width.left > 0) {
-				raylib.DrawRectangle(
-					cast(i32)math.round(boundingBox.x),
-					cast(i32)math.round(boundingBox.y + config.cornerRadius.topLeft),
-					cast(i32)config.width.left,
-					cast(i32)math.round(
-						boundingBox.height -
-						config.cornerRadius.topLeft -
-						config.cornerRadius.bottomLeft,
-					),
-					clayColorToRaylibColor(config.color),
+			if config.width.left > 0 {
+				draw_rect(
+					bounds.x,
+					bounds.y + config.cornerRadius.topLeft,
+					f32(config.width.left),
+					bounds.height - config.cornerRadius.topLeft - config.cornerRadius.bottomLeft,
+					config.color,
 				)
 			}
 			// Right border
-			if (config.width.right > 0) {
-				raylib.DrawRectangle(
-					cast(i32)math.round(
-						boundingBox.x + boundingBox.width - cast(f32)config.width.right,
-					),
-					cast(i32)math.round(boundingBox.y + config.cornerRadius.topRight),
-					cast(i32)config.width.right,
-					cast(i32)math.round(
-						boundingBox.height -
-						config.cornerRadius.topRight -
-						config.cornerRadius.bottomRight,
-					),
-					clayColorToRaylibColor(config.color),
+			if config.width.right > 0 {
+				draw_rect(
+					bounds.x + bounds.width - f32(config.width.right),
+					bounds.y + config.cornerRadius.topRight,
+					f32(config.width.right),
+					bounds.height - config.cornerRadius.topRight - config.cornerRadius.bottomRight,
+					config.color,
 				)
 			}
 			// Top border
-			if (config.width.top > 0) {
-				raylib.DrawRectangle(
-					cast(i32)math.round(boundingBox.x + config.cornerRadius.topLeft),
-					cast(i32)math.round(boundingBox.y),
-					cast(i32)math.round(
-						boundingBox.width -
-						config.cornerRadius.topLeft -
-						config.cornerRadius.topRight,
-					),
-					cast(i32)config.width.top,
-					clayColorToRaylibColor(config.color),
+			if config.width.top > 0 {
+				draw_rect(
+					bounds.x + config.cornerRadius.topLeft,
+					bounds.y,
+					bounds.width - config.cornerRadius.topLeft - config.cornerRadius.topRight,
+					f32(config.width.top),
+					config.color,
 				)
 			}
 			// Bottom border
-			if (config.width.bottom > 0) {
-				raylib.DrawRectangle(
-					cast(i32)math.round(boundingBox.x + config.cornerRadius.bottomLeft),
-					cast(i32)math.round(
-						boundingBox.y + boundingBox.height - cast(f32)config.width.bottom,
-					),
-					cast(i32)math.round(
-						boundingBox.width -
-						config.cornerRadius.bottomLeft -
-						config.cornerRadius.bottomRight,
-					),
-					cast(i32)config.width.bottom,
-					clayColorToRaylibColor(config.color),
+			if config.width.bottom > 0 {
+				draw_rect(
+					bounds.x + config.cornerRadius.bottomLeft,
+					bounds.y + bounds.height - f32(config.width.bottom),
+					bounds.width -
+					config.cornerRadius.bottomLeft -
+					config.cornerRadius.bottomRight,
+					f32(config.width.bottom),
+					config.color,
 				)
 			}
-			if (config.cornerRadius.topLeft > 0) {
-				raylib.DrawRing(
-					raylib.Vector2 {
-						math.round(boundingBox.x + config.cornerRadius.topLeft),
-						math.round(boundingBox.y + config.cornerRadius.topLeft),
-					},
-					math.round(config.cornerRadius.topLeft - cast(f32)config.width.top),
+
+			// Rounded Borders
+			if config.cornerRadius.topLeft > 0 {
+				draw_arc(
+					bounds.x + config.cornerRadius.topLeft,
+					bounds.y + config.cornerRadius.topLeft,
+					config.cornerRadius.topLeft - f32(config.width.top),
 					config.cornerRadius.topLeft,
 					180,
 					270,
-					10,
-					clayColorToRaylibColor(config.color),
+					config.color,
 				)
 			}
-			if (config.cornerRadius.topRight > 0) {
-				raylib.DrawRing(
-					raylib.Vector2 {
-						math.round(
-							boundingBox.x + boundingBox.width - config.cornerRadius.topRight,
-						),
-						math.round(boundingBox.y + config.cornerRadius.topRight),
-					},
-					math.round(config.cornerRadius.topRight - cast(f32)config.width.top),
+			if config.cornerRadius.topRight > 0 {
+				draw_arc(
+					bounds.x + bounds.width - config.cornerRadius.topRight,
+					bounds.y + config.cornerRadius.topRight,
+					config.cornerRadius.topRight - f32(config.width.top),
 					config.cornerRadius.topRight,
 					270,
 					360,
-					10,
-					clayColorToRaylibColor(config.color),
+					config.color,
 				)
 			}
-			if (config.cornerRadius.bottomLeft > 0) {
-				raylib.DrawRing(
-					raylib.Vector2 {
-						math.round(boundingBox.x + config.cornerRadius.bottomLeft),
-						math.round(
-							boundingBox.y + boundingBox.height - config.cornerRadius.bottomLeft,
-						),
-					},
-					math.round(config.cornerRadius.bottomLeft - cast(f32)config.width.top),
+			if config.cornerRadius.bottomLeft > 0 {
+				draw_arc(
+					bounds.x + config.cornerRadius.bottomLeft,
+					bounds.y + bounds.height - config.cornerRadius.bottomLeft,
+					config.cornerRadius.bottomLeft - f32(config.width.top),
 					config.cornerRadius.bottomLeft,
 					90,
 					180,
-					10,
-					clayColorToRaylibColor(config.color),
+					config.color,
 				)
 			}
-			if (config.cornerRadius.bottomRight > 0) {
-				raylib.DrawRing(
-					raylib.Vector2 {
-						math.round(
-							boundingBox.x + boundingBox.width - config.cornerRadius.bottomRight,
-						),
-						math.round(
-							boundingBox.y + boundingBox.height - config.cornerRadius.bottomRight,
-						),
-					},
-					math.round(config.cornerRadius.bottomRight - cast(f32)config.width.bottom),
+			if config.cornerRadius.bottomRight > 0 {
+				draw_arc(
+					bounds.x + bounds.width - config.cornerRadius.bottomRight,
+					bounds.y + bounds.height - config.cornerRadius.bottomRight,
+					config.cornerRadius.bottomRight - f32(config.width.bottom),
 					config.cornerRadius.bottomRight,
 					0.1,
 					90,
-					10,
-					clayColorToRaylibColor(config.color),
+					config.color,
 				)
 			}
-		case clay.RenderCommandType.Custom:
+		case .OverlayColorStart:
+			config := render_command.renderData.overlayColor
+			append(&overlay_colors, config.color)
+		case .OverlayColorEnd:
+			pop(&overlay_colors)
+		case .Custom:
 		// Implement custom element rendering here
 		}
 	}
+}
+
+// Helper procs, mainly for repeated conversions
+
+@(private = "file")
+draw_arc :: proc(
+	x, y: f32,
+	inner_rad, outer_rad: f32,
+	start_angle, end_angle: f32,
+	color: clay.Color,
+) {
+	rl.DrawRing(
+		{math.round(x), math.round(y)},
+		math.round(inner_rad),
+		outer_rad,
+		start_angle,
+		end_angle,
+		10,
+		clay_color_to_rl_color(color),
+	)
+}
+
+@(private = "file")
+draw_rect :: proc(x, y, w, h: f32, color: clay.Color) {
+	rl.DrawRectangle(
+		i32(math.round(x)),
+		i32(math.round(y)),
+		i32(math.round(w)),
+		i32(math.round(h)),
+		clay_color_to_rl_color(color),
+	)
+}
+
+@(private = "file")
+draw_rect_rounded :: proc(x, y, w, h: f32, radius: f32, color: clay.Color) {
+	rl.DrawRectangleRounded({x, y, w, h}, radius, 8, clay_color_to_rl_color(color))
 }
